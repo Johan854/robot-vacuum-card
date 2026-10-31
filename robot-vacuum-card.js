@@ -7,7 +7,7 @@
  * Les entités du robot sont détectées automatiquement à partir de l'aspirateur choisi.
  * Style verre, thème clair/sombre automatique, nuance commune, éditeur visuel, textes en français.
  */
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.1.0";
 
 /* === NUANCE COMMUNE v2 (cartes Johan854) ===
  * Bloc identique dans toutes les cartes. Options : nuance, nuance_perso, intensite.
@@ -75,8 +75,11 @@ const ROOMS = {
   children_room: "Chambre d'enfant", entrance: "Entrée", lounge: "Salon", default: "Pièce", master_bedroom: "Chambre parentale", guest_room: "Chambre d'amis",
 };
 const PARTS = { brush: "Brosse principale", side_brush: "Brosse latérale", filter: "Filtre", unit_care: "Entretien général", round_mop: "Serpillières", dust_bag: "Sac à poussière", cleaning_fluid: "Liquide de nettoyage", blade: "Lames", lens_brush: "Brosse de capteur", strainer: "Filtre à eau", hand_filter: "Filtre aspirateur à main" };
+const STATION_STATE = { idle: "Au repos", emptying_dustbin: "Vidage du bac", washing_mop: "Lavage des serpillières", drying_mop: "Séchage des serpillières" };
+const AUTO_EMPTY = { auto: "Automatique", smart: "Intelligent", off: "Désactivé" };
 const STATION = { empty_dustbin: ["Vider le bac", "mdi:delete-empty-outline"], clean_base: ["Nettoyer la base", "mdi:water-sync"], dry_mop: ["Sécher les serpillières", "mdi:fan"], wash_mop: ["Laver les serpillières", "mdi:washing-machine"] };
 
+const shortName = (st, dev) => { const f = (st && st.attributes && st.attributes.friendly_name) || ""; const t = f.startsWith(dev) ? f.slice(dev.length).replace(/^[\s:–-]+/, "") : f; return t.charAt(0).toUpperCase() + t.slice(1); };
 const prettySlug = (s) => { const t = String(s).replace(/_/g, " ").trim(); return t.charAt(0).toUpperCase() + t.slice(1); };
 const roomLabel = (slug, names) => (names && names[slug]) || ROOMS[slug.replace(/_\d+$/, "")] && (ROOMS[slug.replace(/_\d+$/, "")] + (slug.match(/_(\d+)$/) ? " " + slug.match(/_(\d+)$/)[1] : "")) || prettySlug(slug);
 const durMin = (st) => {
@@ -125,7 +128,7 @@ class RobotVacuumCard extends HTMLElement {
     const c = this._config, h = this._hass;
     if (!c || !h) return;
     const e = this._ents();
-    const ids = [c.entity, e.map, e.battery, e.area, e.time, e.totArea, e.totTime, e.totCount, e.water, e.error, ...e.parts.map((p) => p.id), ...e.station.map((s) => s.id)];
+    const ids = [c.entity, e.map, e.battery, e.area, e.time, e.totArea, e.totTime, e.totCount, e.water, e.error, e.mop, e.stationState, e.autoEmpty, ...e.switches, ...e.parts.map((p) => p.id), ...e.station.map((s) => s.id)];
     const v = h.states[c.entity];
     const sig = ids.map((i) => { const s = i && h.states[i]; return s ? s.state : "x"; }).join("|")
       + "|" + (v ? JSON.stringify([v.attributes.fan_speed, v.attributes.battery_level, v.attributes.rooms]) : "")
@@ -138,7 +141,7 @@ class RobotVacuumCard extends HTMLElement {
     const c = this._config, h = this._hass;
     const sc = this._eCache;
     if (sc && Date.now() - sc.at < 60000) return sc.val;
-    const out = { map: "", battery: "", area: "", time: "", totArea: "", totTime: "", totCount: "", water: "", error: "", parts: [], station: [] };
+    const out = { map: "", battery: "", area: "", time: "", totArea: "", totTime: "", totCount: "", water: "", error: "", mop: "", stationState: "", autoEmpty: "", relocate: "", parts: [], station: [], switches: [] };
     const reg = (h && h.entities) || {};
     const dev = reg[c.entity] && reg[c.entity].device_id;
     const sib = dev ? Object.values(reg).filter((r) => r.device_id === dev && r.entity_id !== c.entity && !r.hidden) : [];
@@ -157,15 +160,20 @@ class RobotVacuumCard extends HTMLElement {
     out.totArea = find("sensor", ["total_stats_area"], /total_area_cleaned|surface_totale/);
     out.totTime = find("sensor", ["total_stats_time"], /total_cleaning_duration|duree_totale/);
     out.totCount = find("sensor", ["total_stats_cleanings"], /total_cleanings|nombre_total/);
-    out.water = find("select", ["water_amount", "water_info"], /water|eau/);
+    out.water = find("select", ["water_amount", "water_info"], /water|debit/);
     out.error = find("sensor", ["error"], /_error$|_erreur$/);
+    out.mop = find("binary_sensor", ["water_mop_attached", "mop_attached"], /mop|serpilliere/);
+    out.stationState = find("sensor", ["station_state"], /station_state|etat_de_la_station/);
+    out.autoEmpty = find("select", ["auto_empty", "auto_empty_frequency"], /auto_empty|vidage/);
+    out.relocate = find("button", ["relocate"], /relocate|repositionner/);
+    out.switches = sib.filter((r) => dom(r) === "switch" && r.entity_category !== "diagnostic").map((r) => r.entity_id);
     const resets = sib.filter((r) => dom(r) === "button" && /reset|reinitialis/.test(tk(r) + r.entity_id));
     sib.filter((r) => dom(r) === "sensor" && (tk(r).startsWith("lifespan") || /lifespan|duree_de_vie/.test(r.entity_id))).forEach((r) => {
       const key = tk(r).replace(/^lifespan_?/, "") || r.entity_id.replace(/^.*(lifespan|duree_de_vie)_?/, "");
       const rs = resets.find((b) => key && (tk(b).endsWith(key) || b.entity_id.endsWith(key)));
       out.parts.push({ id: r.entity_id, key, reset: rs ? rs.entity_id : "" });
     });
-    sib.filter((r) => dom(r) === "button" && (tk(r).startsWith("station_action") || /station/.test(r.entity_id))).forEach((r) => {
+    sib.filter((r) => dom(r) === "button" && !resets.includes(r) && (tk(r).startsWith("station_action") || /station|vider|empty_dustbin/.test(r.entity_id))).forEach((r) => {
       out.station.push({ id: r.entity_id, key: tk(r).replace(/^station_action_?/, "") || r.entity_id.split(".")[1] });
     });
     this._eCache = { at: Date.now(), val: out };
@@ -190,8 +198,13 @@ class RobotVacuumCard extends HTMLElement {
   _rooms() {
     const v = this._hass.states[this._config.entity];
     const r = (v && v.attributes && v.attributes.rooms) || {};
-    return Object.entries(r).map(([slug, ids]) => ({ slug, ids: Array.isArray(ids) ? ids : [ids], label: roomLabel(slug, this._config.room_names) }))
-      .sort((a, b) => a.label.localeCompare(b.label, "fr"));
+    const names = this._config.room_names || {};
+    /* Une puce par zone : une pièce sans nom dans l'appli (« default ») regroupe plusieurs zones, on les sépare. */
+    return Object.entries(r).flatMap(([slug, ids]) => {
+      const list = Array.isArray(ids) ? ids : [ids];
+      return list.map((rid, i) => ({ slug: String(rid), ids: [rid],
+        label: names[String(rid)] || (list.length === 1 && names[slug]) || (slug === "default" ? `Pièce ${i + 1}` : roomLabel(slug, names) + (list.length > 1 ? ` ${i + 1}` : "")) }));
+    }).sort((a, b) => a.label.localeCompare(b.label, "fr", { numeric: true }));
   }
 
   _action(a, arg) {
@@ -204,6 +217,9 @@ class RobotVacuumCard extends HTMLElement {
       case "locate": this._flash("_done", "locate", 3000); return this._call("vacuum", "locate", { entity_id: id });
       case "fan": return this._call("vacuum", "set_fan_speed", { entity_id: id, fan_speed: arg });
       case "water": return this._call("select", "select_option", { entity_id: this._ents().water, option: arg });
+      case "autoempty": return this._call("select", "select_option", { entity_id: this._ents().autoEmpty, option: arg });
+      case "switch": return this._call("switch", "toggle", { entity_id: arg });
+      case "relocate": this._flash("_done", "relocate", 3000); return this._call("button", "press", { entity_id: this._ents().relocate });
       case "room": this._sel.has(arg) ? this._sel.delete(arg) : this._sel.add(arg); return this._sigCheck(true);
       case "passes": this._passes = this._passes === 1 ? 2 : 1; return this._sigCheck(true);
       case "clean_rooms": {
@@ -240,6 +256,7 @@ class RobotVacuumCard extends HTMLElement {
     const bIcon = !isFinite(batt) ? "mdi:battery-unknown" : charging ? "mdi:battery-charging" : batt >= 95 ? "mdi:battery" : `mdi:battery-${Math.max(10, Math.round(batt / 10) * 10)}`;
     const bLvl = !isFinite(batt) ? "na" : batt > 40 ? "ok" : batt > 15 ? "mid" : "crit";
     const errSt = e.error && h.states[e.error];
+    const mopOn = e.mop && h.states[e.mop] && h.states[e.mop].state === "on";
     const errTxt = errSt && !gone(errSt) && !/^(0|no_error|none|ok|aucune.*)$/i.test(errSt.state) ? errSt.state : "";
 
     const tabs = [["controle", "Contrôle", "mdi:gamepad-round-outline"]];
@@ -260,9 +277,12 @@ class RobotVacuumCard extends HTMLElement {
       const fans = (v && v.attributes.fan_speed_list) || [];
       const ws = e.water && h.states[e.water];
       const area = num(h.states[e.area]), tmin = durMin(h.states[e.time]);
+      const opts = e.switches.map((sid) => { const ss = h.states[sid]; if (gone(ss)) return ""; return chip("switch", sid, shortName(ss, name), ss.state === "on"); }).join("")
+        + (e.relocate ? chip("relocate", "", this._done === "relocate" ? "Repositionnement…" : "Repositionner", this._done === "relocate") : "");
       body = `<div class="row">${main}${btn("base", "Base", "mdi:home-import-outline")}${btn("locate", this._done === "locate" ? "Bip !" : "Localiser", "mdi:map-marker-radius-outline")}</div>
         ${fans.length ? `<div class="grp"><div class="gl"><ha-icon icon="mdi:fan"></ha-icon>Puissance d'aspiration</div><div class="chips">${fans.map((f) => chip("fan", f, FAN[f] || prettySlug(f), v.attributes.fan_speed === f)).join("")}</div></div>` : ""}
         ${ws && !gone(ws) && (ws.attributes.options || []).length ? `<div class="grp"><div class="gl"><ha-icon icon="mdi:water-outline"></ha-icon>Débit d'eau</div><div class="chips">${ws.attributes.options.map((o) => chip("water", o, WATER[o] || prettySlug(o), ws.state === o)).join("")}</div></div>` : ""}
+        ${opts ? `<div class="grp"><div class="gl"><ha-icon icon="mdi:tune-variant"></ha-icon>Options</div><div class="chips">${opts}</div></div>` : ""}
         ${e.area || e.time ? `<div class="gl"><ha-icon icon="mdi:history"></ha-icon>Dernier ménage</div><div class="stats">${stat(e.area, "Surface", isFinite(area) ? `${fmt(area)} m²` : "—", "mdi:texture-box")}${stat(e.time, "Durée", durTxt(tmin), "mdi:timer-outline")}</div>` : ""}`;
     } else if (this._tab === "carte") {
       const ms = h.states[e.map];
@@ -278,7 +298,7 @@ class RobotVacuumCard extends HTMLElement {
     } else if (this._tab === "entretien") {
       const parts = e.parts.map((p) => {
         const st = h.states[p.id], val = num(st), lvl = !isFinite(val) ? "na" : val > 30 ? "ok" : val > 10 ? "mid" : "crit";
-        const fn = st && st.attributes.friendly_name ? st.attributes.friendly_name.replace(name, "").replace(/^[\s:–-]+/, "") : "";
+        const fn = shortName(st, name).replace(/^(durée de vie|lifespan)( de la| du| de l'| des| de)?\s*/i, "").replace(/^./, (m) => m.toUpperCase());
         const label = PARTS[p.key] || fn || prettySlug(p.key);
         const rk = "reset:" + p.reset;
         const rb = p.reset ? `<button class="mini ${this._confirm === rk ? "confirm" : this._done === rk ? "done" : ""}" data-a="reset" data-arg="${esc(p.reset)}">${this._confirm === rk ? "Confirmer ?" : this._done === rk ? "Fait ✓" : "Remis à neuf"}</button>` : "";
@@ -286,13 +306,17 @@ class RobotVacuumCard extends HTMLElement {
           <div class="bar"><i class="${lvl}" style="width:${isFinite(val) ? Math.max(0, Math.min(100, val)) : 0}%"></i></div></div>`;
       }).join("");
       const sta = e.station.map((s) => {
-        const [lab, ic] = STATION[s.key] || [prettySlug(s.key), "mdi:home-automation"];
+        const sk = STATION[s.key] ? s.key : /vider|empty/.test(s.key) ? "empty_dustbin" : s.key;
+        const [lab, ic] = STATION[sk] || [shortName(h.states[s.id], name) || prettySlug(s.key), "mdi:home-automation"];
         const k = "station:" + s.id;
         return btn("station", this._confirm === k ? "Confirmer ?" : this._done === k ? "Fait ✓" : lab, ic, this._confirm === k ? "confirm" : this._done === k ? "done" : "", s.id);
       }).join("");
+      const ss = e.stationState && h.states[e.stationState], ae = e.autoEmpty && h.states[e.autoEmpty];
+      const staInfo = (ss && !gone(ss) ? `<div class="sti"><ha-icon icon="mdi:home-automation"></ha-icon>${esc(STATION_STATE[ss.state] || prettySlug(ss.state))}</div>` : "")
+        + (ae && !gone(ae) && (ae.attributes.options || []).length ? `<div class="grp"><div class="sl">Vidage automatique</div><div class="chips">${ae.attributes.options.map((o) => chip("autoempty", o, AUTO_EMPTY[o] || prettySlug(o), ae.state === o)).join("")}</div></div>` : "");
       const ta = num(h.states[e.totArea]), tc = num(h.states[e.totCount]), tt = durMin(h.states[e.totTime]);
       body = `${parts ? `<div class="gl"><ha-icon icon="mdi:cog-outline"></ha-icon>Consommables</div><div class="parts glass">${parts}</div>` : ""}
-        ${sta ? `<div class="gl"><ha-icon icon="mdi:home-automation"></ha-icon>Station</div><div class="row">${sta}</div>` : ""}
+        ${sta || staInfo ? `<div class="gl"><ha-icon icon="mdi:home-automation"></ha-icon>Station</div>${staInfo}${sta ? `<div class="row">${sta}</div>` : ""}` : ""}
         ${e.totArea || e.totCount || e.totTime ? `<div class="gl"><ha-icon icon="mdi:chart-box-outline"></ha-icon>Depuis la mise en service</div><div class="stats">
           ${stat(e.totCount, "Ménages", isFinite(tc) ? fmt(tc) : "—", "mdi:counter")}${stat(e.totArea, "Surface", isFinite(ta) ? `${fmt(ta)} m²` : "—", "mdi:texture-box")}${stat(e.totTime, "Durée", durTxt(tt), "mdi:timer-outline")}</div>` : ""}`;
     }
@@ -347,6 +371,7 @@ class RobotVacuumCard extends HTMLElement {
       .stat { display:flex; align-items:center; gap:.6em; padding:10px 12px; border-radius:16px; } .stat ha-icon { color:var(--rv-acc); }
       .sv { font-weight:800; font-variant-numeric:tabular-nums; } .sl { font-size:.78em; color:var(--rv-muted); }
       .map { display:block; width:100%; padding:8px; border-radius:18px; } .map img { display:block; width:100%; height:auto; max-height:420px; object-fit:contain; border-radius:12px; }
+      .sti { display:flex; align-items:center; gap:.5em; font-size:.9em; font-weight:600; } .sti ha-icon { color:var(--rv-acc); }
       .hint, .empty { font-size:.85em; color:var(--rv-muted); text-align:center; } .empty { padding:18px 0; }
       .parts { display:flex; flex-direction:column; gap:12px; padding:12px 14px; border-radius:18px; }
       .part { display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:4px 10px; }
@@ -362,6 +387,7 @@ class RobotVacuumCard extends HTMLElement {
       <div class="main">
         <div class="status">
           <button class="pill glass ${stLvl}" data-more="${esc(c.entity)}"><ha-icon icon="${stIcon}"></ha-icon>${esc(stTxt)}</button>
+          ${mopOn ? `<button class="pill glass run" data-more="${esc(e.mop)}"><ha-icon icon="mdi:water"></ha-icon>Serpillière</button>` : ""}
           ${isFinite(batt) ? `<button class="pill glass ${bLvl}" data-more="${esc(e.battery || c.entity)}"><ha-icon icon="${bIcon}"></ha-icon>${Math.round(batt)} %</button>` : ""}
         </div>
         ${errTxt ? `<button class="al glass" data-more="${esc(e.error)}"><ha-icon icon="mdi:alert-circle-outline"></ha-icon><span>${esc(errTxt)}</span></button>` : ""}
@@ -378,7 +404,7 @@ class RobotVacuumCard extends HTMLElement {
 /* ---------- Éditeur visuel ---------- */
 const LABELS = { ...GV_LABELS, entity: "Robot aspirateur", title: "Titre (nom du robot si vide)", theme: "Thème", image: "Photo du robot (URL ou /local/…)",
   image_height: "Hauteur de la photo (px)", image_position: "Cadrage de la photo", map_entity: "Image de la carte (auto si vide)", default_tab: "Onglet affiché par défaut",
-  room_names: "Noms des pièces (ex. living_room: Salon)" };
+  room_names: "Noms des pièces (numéro de zone ou nom : 0: Salon)" };
 const SCHEMA = [
   { name: "entity", required: true, selector: { entity: { domain: "vacuum" } } },
   { type: "grid", name: "", schema: [{ name: "title", selector: { text: {} } },
