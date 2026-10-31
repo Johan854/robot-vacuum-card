@@ -7,7 +7,7 @@
  * Les entités du robot sont détectées automatiquement à partir de l'aspirateur choisi.
  * Style verre, thème clair/sombre automatique, nuance commune, éditeur visuel, textes en français.
  */
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.2.0";
 
 /* === NUANCE COMMUNE v2 (cartes Johan854) ===
  * Bloc identique dans toutes les cartes. Options : nuance, nuance_perso, intensite.
@@ -49,6 +49,7 @@ const DEFAULTS = {
   image_position: "center",
   map_entity: "",
   default_tab: "controle",
+  mop: true,
   room_names: {},
 };
 
@@ -256,7 +257,8 @@ class RobotVacuumCard extends HTMLElement {
     const bIcon = !isFinite(batt) ? "mdi:battery-unknown" : charging ? "mdi:battery-charging" : batt >= 95 ? "mdi:battery" : `mdi:battery-${Math.max(10, Math.round(batt / 10) * 10)}`;
     const bLvl = !isFinite(batt) ? "na" : batt > 40 ? "ok" : batt > 15 ? "mid" : "crit";
     const errSt = e.error && h.states[e.error];
-    const mopOn = e.mop && h.states[e.mop] && h.states[e.mop].state === "on";
+    const hasMop = c.mop !== false;
+    const mopOn = hasMop && e.mop && h.states[e.mop] && h.states[e.mop].state === "on";
     const errTxt = errSt && !gone(errSt) && !/^(0|no_error|none|ok|aucune.*)$/i.test(errSt.state) ? errSt.state : "";
 
     const tabs = [["controle", "Contrôle", "mdi:gamepad-round-outline"]];
@@ -281,7 +283,7 @@ class RobotVacuumCard extends HTMLElement {
         + (e.relocate ? chip("relocate", "", this._done === "relocate" ? "Repositionnement…" : "Repositionner", this._done === "relocate") : "");
       body = `<div class="row">${main}${btn("base", "Base", "mdi:home-import-outline")}${btn("locate", this._done === "locate" ? "Bip !" : "Localiser", "mdi:map-marker-radius-outline")}</div>
         ${fans.length ? `<div class="grp"><div class="gl"><ha-icon icon="mdi:fan"></ha-icon>Puissance d'aspiration</div><div class="chips">${fans.map((f) => chip("fan", f, FAN[f] || prettySlug(f), v.attributes.fan_speed === f)).join("")}</div></div>` : ""}
-        ${ws && !gone(ws) && (ws.attributes.options || []).length ? `<div class="grp"><div class="gl"><ha-icon icon="mdi:water-outline"></ha-icon>Débit d'eau</div><div class="chips">${ws.attributes.options.map((o) => chip("water", o, WATER[o] || prettySlug(o), ws.state === o)).join("")}</div></div>` : ""}
+        ${hasMop && ws && !gone(ws) && (ws.attributes.options || []).length ? `<div class="grp"><div class="gl"><ha-icon icon="mdi:water-outline"></ha-icon>Débit d'eau</div><div class="chips">${ws.attributes.options.map((o) => chip("water", o, WATER[o] || prettySlug(o), ws.state === o)).join("")}</div></div>` : ""}
         ${opts ? `<div class="grp"><div class="gl"><ha-icon icon="mdi:tune-variant"></ha-icon>Options</div><div class="chips">${opts}</div></div>` : ""}
         ${e.area || e.time ? `<div class="gl"><ha-icon icon="mdi:history"></ha-icon>Dernier ménage</div><div class="stats">${stat(e.area, "Surface", isFinite(area) ? `${fmt(area)} m²` : "—", "mdi:texture-box")}${stat(e.time, "Durée", durTxt(tmin), "mdi:timer-outline")}</div>` : ""}`;
     } else if (this._tab === "carte") {
@@ -296,7 +298,7 @@ class RobotVacuumCard extends HTMLElement {
         <div class="row">${btn("passes", this._passes === 2 ? "2 passages" : "1 passage", this._passes === 2 ? "mdi:numeric-2-circle-outline" : "mdi:numeric-1-circle-outline")}
         ${btn("clean_rooms", this._done === "clean_rooms" ? "C'est parti ✓" : n ? `Nettoyer ${n} pièce${n > 1 ? "s" : ""}` : "Choisis des pièces", "mdi:broom", `big ${n ? "" : "off"} ${this._done === "clean_rooms" ? "done" : ""}`)}</div>`;
     } else if (this._tab === "entretien") {
-      const parts = e.parts.map((p) => {
+      const parts = e.parts.filter((p) => hasMop || !/mop|serpill/.test(p.key + p.id)).map((p) => {
         const st = h.states[p.id], val = num(st), lvl = !isFinite(val) ? "na" : val > 30 ? "ok" : val > 10 ? "mid" : "crit";
         const fn = shortName(st, name).replace(/^(durée de vie|lifespan)( de la| du| de l'| des| de)?\s*/i, "").replace(/^./, (m) => m.toUpperCase());
         const label = PARTS[p.key] || fn || prettySlug(p.key);
@@ -404,6 +406,7 @@ class RobotVacuumCard extends HTMLElement {
 /* ---------- Éditeur visuel ---------- */
 const LABELS = { ...GV_LABELS, entity: "Robot aspirateur", title: "Titre (nom du robot si vide)", theme: "Thème", image: "Photo du robot (URL ou /local/…)",
   image_height: "Hauteur de la photo (px)", image_position: "Cadrage de la photo", map_entity: "Image de la carte (auto si vide)", default_tab: "Onglet affiché par défaut",
+  mop: "Robot avec serpillière (débit d'eau, badge, usure)",
   room_names: "Noms des pièces (numéro de zone ou nom : 0: Salon)" };
 const SCHEMA = [
   { name: "entity", required: true, selector: { entity: { domain: "vacuum" } } },
@@ -412,6 +415,7 @@ const SCHEMA = [
   { name: "image", selector: { text: {} } },
   { type: "grid", name: "", schema: [{ name: "image_height", selector: { number: { min: 60, max: 320, step: 10, mode: "slider" } } },
     { name: "image_position", selector: { select: { mode: "dropdown", options: [{ value: "center", label: "Centre" }, { value: "top", label: "Haut" }, { value: "bottom", label: "Bas" }] } } }] },
+  { name: "mop", selector: { boolean: {} } },
   { name: "default_tab", selector: { select: { mode: "dropdown", options: [{ value: "controle", label: "Contrôle" }, { value: "carte", label: "Carte" }, { value: "pieces", label: "Pièces" }, { value: "entretien", label: "Entretien" }] } } },
   { type: "expandable", name: "", flatten: true, title: "Avancé", icon: "mdi:tune-variant", schema: [
     { name: "map_entity", selector: { entity: { domain: "image" } } },

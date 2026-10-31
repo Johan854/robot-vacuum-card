@@ -23,6 +23,7 @@ image: /local/robot/r2d2.jpg   # ta photo (dossier /config/www/robot/)
 image_height: 150
 image_position: center          # center, top ou bottom
 default_tab: controle           # controle, carte, pieces ou entretien
+mop: false                      # robot sans serpillière : masque débit d'eau, badge et usure serpillière
 room_names:                     # facultatif : renommer les pièces (par numéro de zone)
   "0": Salon
   "1": Cuisine
@@ -54,5 +55,6 @@ data:
 
 ## Historique des versions
 
+- **1.2.0** : option `mop` (robot avec ou sans serpillière) pour masquer le débit d'eau, le badge et l'usure de la serpillière.
 - **1.1.0** : une puce par zone pour les pièces sans nom, options (interrupteurs du robot, repositionner), badge serpillière, état de la station et fréquence de vidage automatique, détection renforcée des entités en français.
 - **1.0.0** : première version (photo, état, batterie, onglets Contrôle, Carte, Pièces, Entretien).
